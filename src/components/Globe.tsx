@@ -3,6 +3,8 @@ import Globe from 'globe.gl';
 import * as THREE from 'three';
 import { touristPlaces, TouristPlace } from '../data/touristPlaces';
 import { weatherService, WeatherData } from '../services/weatherService';
+import { populationService, PopulationData } from '../services/populationService';
+import { fetchCountriesGeoJSONDirect } from '../data/countries';
 
 interface GlobeComponentProps {
   showWeather: boolean;
@@ -22,6 +24,8 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
   const globeRef = useRef<HTMLDivElement>(null);
   const globeInstance = useRef<any>(null);
   const [weatherData, setWeatherData] = useState<WeatherData[]>([]);
+  const [populationData, setPopulationData] = useState<PopulationData[]>([]);
+  const [countriesGeoJSON, setCountriesGeoJSON] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -35,6 +39,18 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
       .width(window.innerWidth)
       .height(window.innerHeight)
       .enablePointerInteraction(true)
+      // Configure polygon layer for population data (will only be shown when showPopulation is true)
+      .polygonCapColor(feat => feat.properties.POP_EST ? 
+        populationService.getPopulationColor(feat.properties.POP_EST) : 'rgba(200, 200, 200, 0.7)')
+      .polygonSideColor(feat => feat.properties.POP_EST ? 
+        populationService.getPopulationColor(feat.properties.POP_EST).replace('0.8', '0.3') : 'rgba(100, 100, 100, 0.3)')
+      .polygonStrokeColor(() => '#fff')
+      .polygonLabel(({ properties: d }) => `
+        <div style="background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; color: #00ffff; border: 1px solid #00ffff; max-width: 200px;">
+          <div style="font-weight: bold; font-size: 14px; margin-bottom: 8px;">${d.ADMIN} (${d.ISO_A2})</div>
+          <div style="margin-bottom: 4px;">Population: ${d.POP_EST ? populationService.formatPopulation(d.POP_EST) : 'Unknown'}</div>
+        </div>
+      `)
       (globeRef.current);
 
     // Store the globe instance
@@ -69,8 +85,10 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
       })();
     });
 
-    // Fetch weather data
+    // Fetch data
     fetchWeatherData();
+    fetchPopulationData();
+    fetchCountriesData();
 
     // Auto-refresh weather data every 5 minutes
     const interval = setInterval(fetchWeatherData, 5 * 60 * 1000);
@@ -93,6 +111,24 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
     } catch (error) {
       console.error('Error fetching weather data:', error);
       setLoading(false);
+    }
+  };
+
+  const fetchPopulationData = async () => {
+    try {
+      const data = await populationService.fetchPopulationData();
+      setPopulationData(data);
+    } catch (error) {
+      console.error('Error fetching population data:', error);
+    }
+  };
+
+  const fetchCountriesData = async () => {
+    try {
+      const data = await fetchCountriesGeoJSONDirect();
+      setCountriesGeoJSON(data);
+    } catch (error) {
+      console.error('Error fetching countries GeoJSON:', error);
     }
   };
 
@@ -150,6 +186,83 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
     }
   }, [weatherData, showWeather, showAQI, showVegetation, showPopulation]);
 
+  // Update population data visualization
+  useEffect(() => {
+    if (!globeInstance.current || !countriesGeoJSON) return;
+    
+    try {
+      if (showPopulation) {
+        // Make a deep copy to avoid modifying the original data
+        const geoJsonCopy = JSON.parse(JSON.stringify(countriesGeoJSON));
+        
+        // Validate the GeoJSON structure
+        if (!geoJsonCopy || !geoJsonCopy.features || !Array.isArray(geoJsonCopy.features)) {
+          console.error('Invalid GeoJSON structure');
+          return;
+        }
+        
+        // Filter out Antarctica (AQ) as it has no permanent population
+        const features = geoJsonCopy.features.filter((d: any) => 
+          d && d.properties && d.properties.ISO_A2 !== 'AQ'
+        );
+        
+        // Merge population data with GeoJSON
+        if (populationData && populationData.length > 0) {
+          features.forEach((feature: any) => {
+            if (!feature.properties) {
+              feature.properties = {};
+            }
+            
+            const countryData = populationData.find(d => 
+              d.iso_a2 === feature.properties.ISO_A2
+            );
+            
+            if (countryData) {
+              feature.properties.POP_EST = countryData.population;
+            } else {
+              // Set a default population to avoid NaN errors
+              feature.properties.POP_EST = 1000000; // Default 1M population
+            }
+          });
+        }
+        
+        // Set polygon data with a small delay to ensure the globe is ready
+        setTimeout(() => {
+          if (!globeInstance.current) return;
+          
+          // Apply the data
+          globeInstance.current.polygonsData(features);
+          
+          // Animate polygon altitude based on population with a more conservative scale
+          setTimeout(() => {
+            if (!globeInstance.current) return;
+            
+            globeInstance.current
+              .polygonsTransitionDuration(4000)
+              .polygonAltitude(feat => {
+                try {
+                  const population = feat.properties.POP_EST;
+                  if (!population) return 0.01;
+                  // Use a more conservative scale factor to prevent excessive heights
+                  return Math.max(0.01, Math.min(0.2, Math.sqrt(population) * 3e-6));
+                } catch (e) {
+                  console.error('Error calculating polygon altitude:', e);
+                  return 0.01; // Safe fallback
+                }
+              });
+          }, 1000);
+        }, 100);
+      } else {
+        // Clear polygons when population view is not selected
+        globeInstance.current.polygonsData([]);
+      }
+    } catch (error) {
+      console.error('Error processing population data:', error);
+      // Clear polygons on error
+      globeInstance.current.polygonsData([]);
+    }
+  }, [countriesGeoJSON, populationData, showPopulation]);
+
   // Handle auto-rotation toggle
   useEffect(() => {
     if (!globeInstance.current) return;
@@ -186,24 +299,52 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
       {/* Data legend */}
       <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-sm border border-cyan-400/30 rounded-lg p-4 text-cyan-400 font-mono text-sm">
         <div className="font-bold mb-2">Legend</div>
-        <div className="space-y-1">
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-            <span>Cold (&lt; 10°C)</span>
+        {showWeather && (
+          <div className="space-y-1 mb-3">
+            <div className="text-sm font-semibold mb-1">Temperature</div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+              <span>Cold (&lt; 10°C)</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full bg-green-500"></div>
+              <span>Mild (10-20°C)</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <span>Warm (20-30°C)</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full bg-red-500"></div>
+              <span>Hot (&gt; 30°C)</span>
+            </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-green-500"></div>
-            <span>Mild (10-20°C)</span>
+        )}
+        {showPopulation && (
+          <div className="space-y-1">
+            <div className="text-sm font-semibold mb-1">Population</div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: 'rgba(255, 0, 0, 0.8)' }}></div>
+              <span>&gt; 1 Billion</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: 'rgba(255, 128, 0, 0.8)' }}></div>
+              <span>&gt; 500 Million</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: 'rgba(255, 255, 0, 0.8)' }}></div>
+              <span>&gt; 100 Million</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: 'rgba(0, 255, 0, 0.8)' }}></div>
+              <span>&gt; 10 Million</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: 'rgba(0, 255, 255, 0.8)' }}></div>
+              <span>&lt; 10 Million</span>
+            </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-            <span>Warm (20-30°C)</span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-red-500"></div>
-            <span>Hot (&gt; 30°C)</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Stats overlay */}

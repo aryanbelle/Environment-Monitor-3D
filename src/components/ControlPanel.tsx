@@ -102,7 +102,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             onClick={onTogglePopulation}
             icon={<Users className="w-4 h-4" />}
             label="Population"
-            disabled={true}
           />
         </div>
       </div>
