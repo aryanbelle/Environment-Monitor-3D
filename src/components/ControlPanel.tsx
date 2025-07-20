@@ -82,7 +82,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             isActive={showWeather}
             onClick={onToggleWeather}
             icon={<Thermometer className="w-4 h-4" />}
-            label="Weather"
+            label="Weather (3D)"
           />
           <ToggleButton
             isActive={showAQI}

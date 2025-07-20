@@ -5,6 +5,7 @@ import { touristPlaces, TouristPlace } from '../data/touristPlaces';
 import { weatherService, WeatherData } from '../services/weatherService';
 import { populationService, PopulationData } from '../services/populationService';
 import { fetchCountriesGeoJSONDirect } from '../data/countries';
+import { WeatherAnalytics3D } from './WeatherAnalytics3D';
 
 interface GlobeComponentProps {
   showWeather: boolean;
@@ -27,6 +28,7 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
   const [populationData, setPopulationData] = useState<PopulationData[]>([]);
   const [countriesGeoJSON, setCountriesGeoJSON] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [selected3DPlace, setSelected3DPlace] = useState<{place: TouristPlace, weather: WeatherData} | null>(null);
 
   useEffect(() => {
     if (!globeRef.current) return;
@@ -142,6 +144,14 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
         .pointColor((d: WeatherData) => weatherService.getTemperatureColor(d.temperature))
         .pointAltitude(0.02)
         .pointRadius((d: WeatherData) => Math.max(0.1, Math.abs(d.temperature) / 100))
+        .onPointClick((point: WeatherData) => {
+          if (showWeather) {
+            const place = touristPlaces.find(p => p.id === point.id);
+            if (place) {
+              setSelected3DPlace({ place, weather: point });
+            }
+          }
+        })
         .pointLabel((d: WeatherData) => `
           <div style="background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; color: #00ffff; border: 1px solid #00ffff; max-width: 200px;">
             <div style="font-weight: bold; font-size: 14px; margin-bottom: 8px;">${d.name}, ${d.country}</div>
@@ -153,6 +163,9 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
             <div style="margin-bottom: 4px;">👁️ Visibility: ${d.visibility} km</div>
             <div style="margin-bottom: 4px;">☁️ Cloudiness: ${d.cloudiness}%</div>
             ${d.aqi ? `<div>🌬️ AQI: ${d.aqi} (${weatherService.getAQILabel(d.aqi)})</div>` : ''}
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #00ffff;">
+              <small style="color: #00ffff;">💡 Click to explore in 3D</small>
+            </div>
           </div>
         `);
     } else {
@@ -286,6 +299,16 @@ export const GlobeComponent: React.FC<GlobeComponentProps> = ({
   return (
     <div className="relative w-full h-full">
       <div ref={globeRef} className="w-full h-full" />
+      
+      {/* 3D Weather Analytics */}
+      {selected3DPlace && (
+        <WeatherAnalytics3D
+          place={selected3DPlace.place}
+          weatherData={selected3DPlace.weather}
+          isVisible={!!selected3DPlace}
+          onClose={() => setSelected3DPlace(null)}
+        />
+      )}
       
       {loading && (
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-cyan-400 text-lg font-mono">
