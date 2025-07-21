@@ -20,6 +20,7 @@ export const WeatherAnalytics3D: React.FC<WeatherAnalytics3DProps> = ({
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [apiKeyMissing, setApiKeyMissing] = useState(false);
 
   useEffect(() => {
     if (!isVisible || !mapRef.current) return;
@@ -28,74 +29,103 @@ export const WeatherAnalytics3D: React.FC<WeatherAnalytics3DProps> = ({
       try {
         setIsLoading(true);
         setError(null);
+        setApiKeyMissing(false);
+
+        // Check if Google Maps API key is available
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+        if (!apiKey) {
+          setApiKeyMissing(true);
+          setIsLoading(false);
+          return;
+        }
 
         // Load Google Maps API
         const { Loader } = await import('@googlemaps/js-api-loader');
         
         const loader = new Loader({
-          apiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
+          apiKey: apiKey,
           version: 'weekly',
           libraries: ['maps', 'marker']
         });
 
-        await loader.load();
+        try {
+          await loader.load();
+        } catch (loadError: any) {
+          console.error('Google Maps API loading error:', loadError);
+          if (loadError.message?.includes('ApiProjectMapError') || 
+              loadError.message?.includes('API key') ||
+              loadError.message?.includes('billing')) {
+            setError('Google Maps API configuration error. Please check your API key, enable required APIs (Maps JavaScript API, 3D Tiles API), and ensure billing is enabled in Google Cloud Console.');
+          } else {
+            setError(`Failed to load Google Maps API: ${loadError.message}`);
+          }
+          setIsLoading(false);
+          return;
+        }
 
         // Initialize the map with 3D view
-        const mapInstance = new google.maps.Map(mapRef.current!, {
-          center: { lat: place.lat, lng: place.lng },
-          zoom: 18,
-          mapId: 'photorealistic-3d-map', // Required for 3D tiles
-          tilt: 67.5,
-          heading: 0,
-          mapTypeId: 'satellite',
-          disableDefaultUI: true,
-          gestureHandling: 'greedy',
-          backgroundColor: '#000'
-        });
+        try {
+          const mapInstance = new google.maps.Map(mapRef.current!, {
+            center: { lat: place.lat, lng: place.lng },
+            zoom: 18,
+            mapId: 'photorealistic-3d-map', // Required for 3D tiles
+            tilt: 67.5,
+            heading: 0,
+            mapTypeId: 'satellite',
+            disableDefaultUI: true,
+            gestureHandling: 'greedy',
+            backgroundColor: '#000'
+          });
 
-        // Add weather marker
-        const marker = new google.maps.Marker({
-          position: { lat: place.lat, lng: place.lng },
-          map: mapInstance,
-          title: `${place.name} - ${weatherData.temperature}°C`,
-          icon: {
-            url: `https://openweathermap.org/img/wn/${weatherData.icon}@2x.png`,
-            scaledSize: new google.maps.Size(50, 50)
-          }
-        });
+          // Add weather marker
+          const marker = new google.maps.Marker({
+            position: { lat: place.lat, lng: place.lng },
+            map: mapInstance,
+            title: `${place.name} - ${weatherData.temperature}°C`,
+            icon: {
+              url: `https://openweathermap.org/img/wn/${weatherData.icon}@2x.png`,
+              scaledSize: new google.maps.Size(50, 50)
+            }
+          });
 
-        // Add info window with weather details
-        const infoWindow = new google.maps.InfoWindow({
-          content: `
-            <div style="color: #000; font-family: monospace; min-width: 200px;">
-              <h3 style="margin: 0 0 10px 0; color: #0066cc;">${place.name}</h3>
-              <div style="display: grid; gap: 5px;">
-                <div>🌡️ ${weatherData.temperature}°C (feels like ${weatherData.feelsLike}°C)</div>
-                <div>☁️ ${weatherData.description}</div>
-                <div>💧 Humidity: ${weatherData.humidity}%</div>
-                <div>💨 Wind: ${weatherData.windSpeed} m/s</div>
-                <div>📊 Pressure: ${weatherData.pressure} hPa</div>
+          // Add info window with weather details
+          const infoWindow = new google.maps.InfoWindow({
+            content: `
+              <div style="color: #000; font-family: monospace; min-width: 200px;">
+                <h3 style="margin: 0 0 10px 0; color: #0066cc;">${place.name}</h3>
+                <div style="display: grid; gap: 5px;">
+                  <div>🌡️ ${weatherData.temperature}°C (feels like ${weatherData.feelsLike}°C)</div>
+                  <div>☁️ ${weatherData.description}</div>
+                  <div>💧 Humidity: ${weatherData.humidity}%</div>
+                  <div>💨 Wind: ${weatherData.windSpeed} m/s</div>
+                  <div>📊 Pressure: ${weatherData.pressure} hPa</div>
+                </div>
               </div>
-            </div>
-          `
-        });
+            `
+          });
 
-        marker.addListener('click', () => {
-          infoWindow.open(mapInstance, marker);
-        });
+          marker.addListener('click', () => {
+            infoWindow.open(mapInstance, marker);
+          });
 
-        setMap(mapInstance);
-        setIsLoading(false);
+          setMap(mapInstance);
+          setIsLoading(false);
 
-        // Smooth zoom animation
-        setTimeout(() => {
-          mapInstance.setZoom(20);
-          mapInstance.setTilt(75);
-        }, 1000);
+          // Smooth zoom animation
+          setTimeout(() => {
+            mapInstance.setZoom(20);
+            mapInstance.setTilt(75);
+          }, 1000);
+
+        } catch (mapError: any) {
+          console.error('Error creating map instance:', mapError);
+          setError(`Failed to initialize 3D map: ${mapError.message}`);
+          setIsLoading(false);
+        }
 
       } catch (err) {
         console.error('Error initializing 3D map:', err);
-        setError('Failed to load 3D map. Please check your Google Maps API key.');
+        setError(`Failed to load 3D map: ${err instanceof Error ? err.message : 'Unknown error'}`);
         setIsLoading(false);
       }
     };
@@ -175,9 +205,42 @@ export const WeatherAnalytics3D: React.FC<WeatherAnalytics3DProps> = ({
           <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
             <div className="text-center text-red-400 max-w-md">
               <p className="font-mono mb-4">{error}</p>
-              <p className="font-mono text-sm text-gray-400">
-                Please ensure you have a valid Google Maps API key with Maps JavaScript API enabled.
-              </p>
+              <div className="font-mono text-sm text-gray-400 space-y-2">
+                <p>To fix this issue:</p>
+                <ol className="text-left list-decimal list-inside space-y-1">
+                  <li>Get a Google Maps API key from Google Cloud Console</li>
+                  <li>Enable Maps JavaScript API and 3D Tiles API</li>
+                  <li>Enable billing for your Google Cloud project</li>
+                  <li>Add the key to your .env file as VITE_GOOGLE_MAPS_API_KEY</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* API Key Missing Overlay */}
+        {apiKeyMissing && (
+          <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
+            <div className="text-center text-yellow-400 max-w-md">
+              <h3 className="font-mono text-lg mb-4">Google Maps API Key Required</h3>
+              <p className="font-mono mb-4">3D weather analytics requires a Google Maps API key.</p>
+              <div className="font-mono text-sm text-gray-400 space-y-2">
+                <p>Setup steps:</p>
+                <ol className="text-left list-decimal list-inside space-y-1">
+                  <li>Visit <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-cyan-400 underline">Google Cloud Console</a></li>
+                  <li>Create a new project or select existing one</li>
+                  <li>Enable Maps JavaScript API and 3D Tiles API</li>
+                  <li>Enable billing (required for 3D features)</li>
+                  <li>Create an API key</li>
+                  <li>Add VITE_GOOGLE_MAPS_API_KEY=your_key_here to .env file</li>
+                </ol>
+              </div>
+              <button
+                onClick={onClose}
+                className="mt-4 px-4 py-2 bg-cyan-500/20 border border-cyan-400 rounded-lg text-cyan-400 hover:bg-cyan-500/30 transition-all duration-300"
+              >
+                Return to Globe View
+              </button>
             </div>
           </div>
         )}
